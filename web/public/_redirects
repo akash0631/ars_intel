@@ -1,0 +1,8 @@
+# Cloudflare Pages — proxy /api/* to the ars-intel-api Worker.
+# Update the destination host after binding a custom domain in CF dashboard.
+# 200 = rewrite (transparent proxy, browser sees same origin).
+
+/api/*  https://ars-intel-api.v2retail.net/api/:splat  200
+
+# SPA fallback
+/*      /index.html                                    200

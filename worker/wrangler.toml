@@ -1,0 +1,23 @@
+name = "ars-intel-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-23"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+SNOWFLAKE_ACCOUNT = "iafphkw-hh80816"
+SNOWFLAKE_USER = "akashv2kart"
+SNOWFLAKE_WAREHOUSE = "ALLOC_WH"
+SNOWFLAKE_DATABASE = "V2RETAIL"
+SNOWFLAKE_SCHEMA = "ARS_GOLD"
+
+# Secrets (set via: wrangler secret put <NAME>)
+#   SNOWFLAKE_PRIVATE_KEY        — PEM-encoded RSA private key (PKCS#8, no passphrase)
+#   SNOWFLAKE_PRIVATE_KEY_FP     — public-key fingerprint, e.g. SHA256:abcd... (from DESC USER)
+
+[observability]
+enabled = true
+
+# Optional custom domain — bind in CF dashboard or via routes
+# [[routes]]
+# pattern = "ars-intel-api.v2retail.net/*"
+# zone_name = "v2retail.net"
