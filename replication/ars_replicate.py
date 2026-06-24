@@ -29,7 +29,14 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
-import pyodbc
+try:
+    import pyodbc as _pyodbc
+except ImportError:
+    _pyodbc = None
+try:
+    import pymssql as _pymssql
+except ImportError:
+    _pymssql = None
 import snowflake.connector
 from snowflake.connector.pandas_tools import write_pandas
 from dotenv import load_dotenv
@@ -39,7 +46,7 @@ from dotenv import load_dotenv
 # ---------------------------------------------------------------------------
 load_dotenv()
 
-SQL_SERVER     = "HOPC345"
+SQL_SERVER     = os.environ.get("ARS_SQL_SERVER", "arsdbpro")
 SQL_DATABASE   = "Rep_Data"
 SQL_USER       = "sa"
 SQL_PASSWORD   = os.environ.get("SQL_PASSWORD")
@@ -89,29 +96,53 @@ log = logging.getLogger("ars_replicate")
 # ---------------------------------------------------------------------------
 # Connections
 # ---------------------------------------------------------------------------
-def sql_conn() -> pyodbc.Connection:
+def sql_conn():
     if not SQL_PASSWORD:
         sys.exit("SQL_PASSWORD env var not set")
-    conn_str = (
-        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-        f"SERVER={SQL_SERVER};DATABASE={SQL_DATABASE};"
-        f"UID={SQL_USER};PWD={SQL_PASSWORD};"
-        f"TrustServerCertificate=yes;"
+    backend = os.environ.get("ARS_SQL_BACKEND", "auto")
+    if backend in ("auto", "pyodbc") and _pyodbc is not None:
+        drivers = [d for d in _pyodbc.drivers() if "SQL Server" in d]
+        modern = next((d for d in drivers if "ODBC Driver" in d), None)
+        if modern or backend == "pyodbc":
+            driver = os.environ.get("ARS_SQL_DRIVER", modern or "ODBC Driver 17 for SQL Server")
+            conn_str = (
+                f"DRIVER={{{driver}}};"
+                f"SERVER={SQL_SERVER};DATABASE={SQL_DATABASE};"
+                f"UID={SQL_USER};PWD={SQL_PASSWORD};"
+                f"TrustServerCertificate=yes;"
+            )
+            return _pyodbc.connect(conn_str)
+    if _pymssql is None:
+        sys.exit("no SQL Server backend: install ODBC Driver 18 (pyodbc) or pip install pymssql")
+    return _pymssql.connect(
+        server=SQL_SERVER, user=SQL_USER, password=SQL_PASSWORD, database=SQL_DATABASE
     )
-    return pyodbc.connect(conn_str)
 
 
 def sf_conn() -> snowflake.connector.SnowflakeConnection:
-    if not SF_PASSWORD:
-        sys.exit("SNOWFLAKE_PASSWORD env var not set")
-    return snowflake.connector.connect(
+    kwargs = dict(
         account=SF_ACCOUNT,
         user=SF_USER,
-        password=SF_PASSWORD,
         warehouse=SF_WAREHOUSE,
         database=SF_DATABASE,
         schema=SF_SCHEMA,
     )
+    key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH",
+                              os.path.expanduser("~/.snowflake/akashv2kart_rsa.p8"))
+    if os.path.exists(key_path):
+        from cryptography.hazmat.primitives import serialization
+        with open(key_path, "rb") as kf:
+            p_key = serialization.load_pem_private_key(kf.read(), password=None)
+        kwargs["private_key"] = p_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    elif SF_PASSWORD:
+        kwargs["password"] = SF_PASSWORD
+    else:
+        sys.exit("need ~/.snowflake/akashv2kart_rsa.p8 or SNOWFLAKE_PASSWORD env")
+    return snowflake.connector.connect(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +184,7 @@ def set_watermark(sf, table_name: str, last_loaded_at: datetime, rows_loaded: in
 # ---------------------------------------------------------------------------
 def truncate_target(sf, target_table: str) -> None:
     cur = sf.cursor()
-    cur.execute(f"TRUNCATE TABLE {SF_DATABASE}.{SF_SCHEMA}.{target_table}")
+    cur.execute(f"DROP TABLE IF EXISTS {SF_DATABASE}.{SF_SCHEMA}.{target_table}")
     sf.commit()
     cur.close()
 
@@ -165,11 +196,19 @@ def stream_to_snowflake(sql, sf, query: str, target_table: str) -> int:
     for i, df in enumerate(chunk_iter, start=1):
         if df.empty:
             continue
-        df.columns = [c.upper() for c in df.columns]
+        def _norm(c: str) -> str:
+            import re as _re
+            s = _re.sub(r"[^A-Za-z0-9_]", "_", c).upper()
+            if s and s[0].isdigit():
+                s = "_" + s
+            return s
+        df.columns = [_norm(c) for c in df.columns]
         success, nchunks, nrows, _ = write_pandas(
             sf, df, target_table,
             database=SF_DATABASE, schema=SF_SCHEMA,
             quote_identifiers=False,
+            auto_create_table=(i == 1),
+            overwrite=False,
         )
         if not success:
             raise RuntimeError(f"write_pandas failed for {target_table} chunk {i}")

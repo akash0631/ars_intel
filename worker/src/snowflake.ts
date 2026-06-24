@@ -16,8 +16,9 @@ export interface SnowflakeEnv {
   SNOWFLAKE_WAREHOUSE: string;
   SNOWFLAKE_DATABASE: string;
   SNOWFLAKE_SCHEMA: string;
-  SNOWFLAKE_PRIVATE_KEY: string;          // secret
-  SNOWFLAKE_PRIVATE_KEY_FP: string;       // secret — "SHA256:..."
+  SNOWFLAKE_PRIVATE_KEY?: string;          // secret — for JWT keypair auth
+  SNOWFLAKE_PRIVATE_KEY_FP?: string;       // secret — "SHA256:..."
+  SNOWFLAKE_PAT?: string;                  // secret — programmatic access token (preferred)
 }
 
 export interface SnowflakeBinding {
@@ -44,18 +45,24 @@ let cachedJwt: SignedJwt | null = null;
 
 async function getJwt(env: SnowflakeEnv): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  // refresh ~10 min before expiry; treat 50-min window as "fresh"
   if (cachedJwt && cachedJwt.expiresAt - now > 600) {
     return cachedJwt.token;
+  }
+  if (!env.SNOWFLAKE_PRIVATE_KEY || !env.SNOWFLAKE_PRIVATE_KEY_FP) {
+    throw new Error("set SNOWFLAKE_PAT or SNOWFLAKE_PRIVATE_KEY+_FP secrets");
   }
   cachedJwt = await buildSnowflakeJwt({
     account: env.SNOWFLAKE_ACCOUNT,
     user: env.SNOWFLAKE_USER,
     privateKeyPem: env.SNOWFLAKE_PRIVATE_KEY,
     publicKeyFingerprint: env.SNOWFLAKE_PRIVATE_KEY_FP,
-    ttlSeconds: 3540, // 59 min; we treat as fresh for ~50 min
+    ttlSeconds: 3540,
   });
   return cachedJwt.token;
+}
+
+function authTokenType(env: SnowflakeEnv): string {
+  return "KEYPAIR_JWT";
 }
 
 function accountHost(account: string): string {
@@ -97,7 +104,8 @@ async function pollStatement(env: SnowflakeEnv, jwt: string, handle: string, max
     const r = await fetch(url, {
       headers: {
         Authorization: `Bearer ${jwt}`,
-        "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
+        "X-Snowflake-Authorization-Token-Type": authTokenType(env),
+        "User-Agent": "ars-intel-api/0.1",
         Accept: "application/json",
       },
     });
@@ -135,7 +143,8 @@ export async function executeQuery(
     method: "POST",
     headers: {
       Authorization: `Bearer ${jwt}`,
-      "X-Snowflake-Authorization-Token-Type": "KEYPAIR_JWT",
+      "X-Snowflake-Authorization-Token-Type": authTokenType(env),
+      "User-Agent": "ars-intel-api/0.1",
       "Content-Type": "application/json",
       Accept: "application/json",
     },

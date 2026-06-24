@@ -1,18 +1,20 @@
 -- ars_intel: silver views in ARS_GOLD
 -- Typed, joined, enriched. No rule logic here — just clean slabs.
+-- NOTE: pandas write_pandas serializes datetime64[ns] as NUMBER scale=9 (epoch ns).
+-- We unwrap via TO_TIMESTAMP_NTZ(col, 9) in this layer.
 
 USE SCHEMA V2RETAIL.ARS_GOLD;
 
 -- ---------------------------------------------------------------------------
--- V_SILVER_SESSIONS: one row per ARS run
+-- V_SILVER_SESSIONS
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW V_SILVER_SESSIONS AS
 SELECT
     s.SESSION_ID,
-    s.STARTED_AT,
-    CAST(NULL AS TIMESTAMP_NTZ)             AS FINISHED_AT,
-    CAST(s.STARTED_AT AS DATE)              AS RUN_DATE,
-    HOUR(s.STARTED_AT)                      AS RUN_HOUR,
+    TO_TIMESTAMP_NTZ(s.STARTED_AT, 9)               AS STARTED_AT,
+    CAST(NULL AS TIMESTAMP_NTZ)                     AS FINISHED_AT,
+    CAST(TO_TIMESTAMP_NTZ(s.STARTED_AT, 9) AS DATE) AS RUN_DATE,
+    HOUR(TO_TIMESTAMP_NTZ(s.STARTED_AT, 9))         AS RUN_HOUR,
     s.STATUS,
     s.ALLOCATION_MODE,
     s.MAJCAT_COUNT,
@@ -24,43 +26,42 @@ SELECT
 FROM V2RETAIL.ARS_BRONZE.ARS_LISTING_SESSIONS s;
 
 -- ---------------------------------------------------------------------------
--- V_SILVER_SESSION_MAJCAT: session × majcat (one row per ARS_ALLOC_MAJCAT_QUEUE entry)
--- Used by R9 regression detector. Exposes per-majcat status/error/ship/hold.
+-- V_SILVER_SESSION_MAJCAT
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW V_SILVER_SESSION_MAJCAT AS
 SELECT
     s.SESSION_ID,
-    s.STARTED_AT,
-    CAST(s.STARTED_AT AS DATE)              AS RUN_DATE,
-    HOUR(s.STARTED_AT)                      AS RUN_HOUR,
-    s.STATUS                                AS SESSION_STATUS,
+    TO_TIMESTAMP_NTZ(s.STARTED_AT, 9)               AS STARTED_AT,
+    CAST(TO_TIMESTAMP_NTZ(s.STARTED_AT, 9) AS DATE) AS RUN_DATE,
+    HOUR(TO_TIMESTAMP_NTZ(s.STARTED_AT, 9))         AS RUN_HOUR,
+    s.STATUS                                        AS SESSION_STATUS,
     s.ALLOCATION_MODE,
     q.MAJ_CAT,
-    q.STATUS                                AS MAJCAT_STATUS,
-    q.ERROR_MSG                             AS MAJCAT_ERROR_MSG,
-    q.SHIP_QTY                              AS MAJCAT_SHIP_QTY,
-    q.HOLD_QTY                              AS MAJCAT_HOLD_QTY,
-    q.ROWS_AFFECTED                         AS MAJCAT_ROWS_AFFECTED,
-    q.ATTEMPTS                              AS MAJCAT_ATTEMPTS,
-    q.DURATION_SEC                          AS MAJCAT_DURATION_SEC,
-    q.OPT_COUNT                             AS MAJCAT_OPT_COUNT,
-    q.PICKED_AT                             AS MAJCAT_PICKED_AT,
-    q.COMPLETED_AT                          AS MAJCAT_COMPLETED_AT,
-    q.WORKER_ID                             AS MAJCAT_WORKER_ID
+    q.STATUS                                        AS MAJCAT_STATUS,
+    q.ERROR_MSG                                     AS MAJCAT_ERROR_MSG,
+    q.SHIP_QTY                                      AS MAJCAT_SHIP_QTY,
+    q.HOLD_QTY                                      AS MAJCAT_HOLD_QTY,
+    q.ROWS_AFFECTED                                 AS MAJCAT_ROWS_AFFECTED,
+    q.ATTEMPTS                                      AS MAJCAT_ATTEMPTS,
+    q.DURATION_SEC                                  AS MAJCAT_DURATION_SEC,
+    q.OPT_COUNT                                     AS MAJCAT_OPT_COUNT,
+    TO_TIMESTAMP_NTZ(q.PICKED_AT, 9)                AS MAJCAT_PICKED_AT,
+    TO_TIMESTAMP_NTZ(q.COMPLETED_AT, 9)             AS MAJCAT_COMPLETED_AT,
+    q.WORKER_ID                                     AS MAJCAT_WORKER_ID
 FROM V2RETAIL.ARS_BRONZE.ARS_LISTING_SESSIONS s
 LEFT JOIN V2RETAIL.ARS_BRONZE.ARS_ALLOC_MAJCAT_QUEUE q
-       ON q.CREATED_AT BETWEEN DATEADD('hour', -1, s.STARTED_AT)
-                          AND DATEADD('hour',  6, s.STARTED_AT);
+       ON TO_TIMESTAMP_NTZ(q.CREATED_AT, 9)
+          BETWEEN DATEADD('hour', -1, TO_TIMESTAMP_NTZ(s.STARTED_AT, 9))
+              AND DATEADD('hour',  6, TO_TIMESTAMP_NTZ(s.STARTED_AT, 9));
 
 -- ---------------------------------------------------------------------------
--- V_SILVER_LISTING: listing_history enriched + ALL per-attribute rollups exposed
--- store_priority: ST_RANK 1 (top) -> 1.0, ST_RANK 20+ (bottom) -> 0.05
+-- V_SILVER_LISTING
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW V_SILVER_LISTING AS
 SELECT
     lh.SESSION_ID,
-    lh.PARKED_AT,
-    lh.APPROVED_AT,
+    TO_TIMESTAMP_NTZ(lh.PARKED_AT, 9)               AS PARKED_AT,
+    TO_TIMESTAMP_NTZ(lh.APPROVED_AT, 9)             AS APPROVED_AT,
     lh.APPROVED_BY,
     lh.WERKS,
     COALESCE(sp.STORE_NAME, lh.WERKS)               AS STORE_NAME,
@@ -75,15 +76,15 @@ SELECT
     COALESCE(mp.MAJ_CAT, lh.MAJ_CAT)                AS MAJ_CAT_CANON,
     COALESCE(mp.CLR, lh.CLR)                        AS CLR,
     COALESCE(mp.FAB, lh.FAB)                        AS FAB,
-    COALESCE(mp.FIT, lh.FIT)                        AS FIT,
+    mp.FIT                                          AS FIT,
     COALESCE(mp.RNG_SEG, lh.RNG_SEG)                AS RNG_SEG,
     COALESCE(mp.MERGE_RNG_SEG, lh.MERGE_RNG_SEG)    AS MERGE_RNG_SEG,
     COALESCE(mp.M_VND_CD, lh.M_VND_CD)              AS M_VND_CD,
     COALESCE(mp.M_YARN_02, lh.M_YARN_02)            AS M_YARN_02,
     COALESCE(mp.WEAVE_2, lh.WEAVE_2)                AS WEAVE_2,
     COALESCE(mp.GEN_ART_DESC, lh.GEN_ART_DESC)      AS GEN_ART_DESC,
-    COALESCE(mp.MRP, lh.MRP)                        AS MRP,
-    COALESCE(mp.SSN, lh.SSN)                        AS SSN,
+    mp.MRP                                          AS MRP,
+    mp.SSN                                          AS SSN,
     lh.IS_NEW,
     lh.OPT_TYPE,
     lh.ST_STK_V06_QTY,
@@ -100,45 +101,30 @@ SELECT
     lh.MSA_FNL_Q,
     lh.VAR_COUNT,
     lh.VAR_FNL_COUNT,
-    -- maj_cat rollups
     lh.MJ_STK_TTL, lh.MJ_STR, lh.MJ_CONT, lh.MJ_MBQ, lh.MJ_OPT_CNT,
     lh.MJ_DISP_Q, lh.MJ_REQ, lh.MJ_REQ_WITH_EXC, lh.MJ_REQ_NO_EXC,
-    -- merge_rng_seg rollups
     lh.MERGE_RNG_SEG_STK_TTL, lh.MERGE_RNG_SEG_STR, lh.MERGE_RNG_SEG_CONT,
     lh.MERGE_RNG_SEG_MBQ, lh.MERGE_RNG_SEG_OPT_CNT, lh.MERGE_RNG_SEG_DISP_Q,
     lh.MERGE_RNG_SEG_REQ,
-    -- rng_seg rollups
     lh.RNG_SEG_STK_TTL, lh.RNG_SEG_STR, lh.RNG_SEG_CONT,
     lh.RNG_SEG_MBQ, lh.RNG_SEG_OPT_CNT, lh.RNG_SEG_DISP_Q,
     lh.RNG_SEG_REQ,
-    -- m_yarn_02 rollups
     lh.M_YARN_02_STK_TTL, lh.M_YARN_02_STR, lh.M_YARN_02_CONT,
     lh.M_YARN_02_MBQ, lh.M_YARN_02_OPT_CNT, lh.M_YARN_02_DISP_Q,
     lh.M_YARN_02_REQ,
-    -- weave_2 rollups
     lh.WEAVE_2_STK_TTL, lh.WEAVE_2_STR, lh.WEAVE_2_CONT,
     lh.WEAVE_2_MBQ, lh.WEAVE_2_OPT_CNT, lh.WEAVE_2_DISP_Q,
     lh.WEAVE_2_REQ,
-    -- fab rollups
     lh.FAB_STK_TTL, lh.FAB_STR, lh.FAB_CONT,
     lh.FAB_MBQ, lh.FAB_OPT_CNT, lh.FAB_DISP_Q,
     lh.FAB_REQ,
-    -- clr rollups
     lh.CLR_STK_TTL, lh.CLR_STR, lh.CLR_CONT,
     lh.CLR_MBQ, lh.CLR_OPT_CNT, lh.CLR_DISP_Q,
     lh.CLR_REQ,
-    -- m_vnd_cd rollups
     lh.M_VND_CD_STK_TTL, lh.M_VND_CD_STR, lh.M_VND_CD_CONT,
     lh.M_VND_CD_MBQ, lh.M_VND_CD_OPT_CNT, lh.M_VND_CD_DISP_Q,
     lh.M_VND_CD_REQ,
-    -- fit rollups
-    lh.FIT_STK_TTL, lh.FIT_STR, lh.FIT_CONT,
-    lh.FIT_MBQ, lh.FIT_OPT_CNT, lh.FIT_DISP_Q,
-    lh.FIT_REQ,
-    -- per option
-    lh.PER_OPT_SALE, lh.OPT_MBQ, lh.OPT_REQ, lh.EXCESS_STK, lh.ART_EXCESS,
-    lh.ELIG_FLAG,
-    lh.ELIG_REASON
+    lh.PER_OPT_SALE, lh.OPT_MBQ, lh.OPT_REQ, lh.EXCESS_STK, lh.ART_EXCESS
 FROM V2RETAIL.ARS_BRONZE.ARS_LISTING_HISTORY lh
 LEFT JOIN V2RETAIL.ARS_BRONZE.STORE_PLANT_MASTER sp
        ON sp.PLANT_CODE = lh.WERKS
@@ -146,29 +132,36 @@ LEFT JOIN V2RETAIL.ARS_BRONZE.MASTER_PRODUCT mp
        ON mp.GEN_ART_NUMBER = lh.GEN_ART_NUMBER;
 
 -- ---------------------------------------------------------------------------
--- V_SILVER_ALLOC: alloc_history enriched, RUN_DATE pulled from sessions
+-- V_SILVER_LISTING_ELIG: separate view appending ELIG_FLAG/ELIG_REASON only when
+-- those cols exist (some loads of ARS_LISTING_HISTORY omit them; defensive).
+-- ELIG_REASON inference: NULL ELIG → NO_DEMAND.
+-- ---------------------------------------------------------------------------
+-- (left for follow-up — ARS_LISTING_HISTORY in this load omits ELIG_FLAG/REASON)
+
+-- ---------------------------------------------------------------------------
+-- V_SILVER_ALLOC
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW V_SILVER_ALLOC AS
 SELECT
     ah.SESSION_ID,
-    CAST(s.STARTED_AT AS DATE)                      AS RUN_DATE,
+    CAST(TO_TIMESTAMP_NTZ(s.STARTED_AT, 9) AS DATE) AS RUN_DATE,
     ah.PARK_STATUS,
     ah.WERKS,
     ah.GEN_ART_NUMBER,
     ah.GEN_ART_DESC,
     ah.VAR_ART,
-    mp.SZ                                           AS SZ,
-    mp.MAJ_CAT                                      AS MAJ_CAT,
-    mp.CLR                                          AS CLR,
-    mp.FAB                                          AS FAB,
-    mp.FIT                                          AS FIT,
-    mp.RNG_SEG                                      AS RNG_SEG,
-    mp.MERGE_RNG_SEG                                AS MERGE_RNG_SEG,
-    mp.M_VND_CD                                     AS M_VND_CD,
-    mp.M_YARN_02                                    AS M_YARN_02,
-    mp.WEAVE_2                                      AS WEAVE_2,
-    mp.MRP                                          AS MRP,
-    mp.SSN                                          AS SSN,
+    mp.SZ,
+    mp.MAJ_CAT,
+    mp.CLR,
+    mp.FAB,
+    mp.FIT,
+    mp.RNG_SEG,
+    mp.MERGE_RNG_SEG,
+    mp.M_VND_CD,
+    mp.M_YARN_02,
+    mp.WEAVE_2,
+    mp.MRP,
+    mp.SSN,
     ah.ALLOC_FLAG,
     ah.SHIP_QTY,
     ah.HOLD_QTY,
@@ -188,7 +181,7 @@ LEFT JOIN V2RETAIL.ARS_BRONZE.ARS_LISTING_SESSIONS s
        ON s.SESSION_ID = ah.SESSION_ID;
 
 -- ---------------------------------------------------------------------------
--- V_SILVER_REQUIREMENT: per (store, maj_cat) requirement input rollup
+-- V_SILVER_REQUIREMENT
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW V_SILVER_REQUIREMENT AS
 SELECT
@@ -208,7 +201,7 @@ FROM V2RETAIL.ARS_BRONZE.MASTER_ALC_INPUT_ST_ART r
 GROUP BY r.ST_CD, r.MAJ_CAT;
 
 -- ---------------------------------------------------------------------------
--- V_SILVER_PEND_ALC: raw passthrough of pending alloc for R8 BDC detector
+-- V_SILVER_PEND_ALC
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW V_SILVER_PEND_ALC AS
 SELECT
@@ -227,11 +220,11 @@ SELECT
     p.ALLOC_QTY,
     p.BDC_QTY,
     p.DO_QTY,
-    p.APPROVED_AT,
-    p.LAST_BDC_AT,
+    TO_TIMESTAMP_NTZ(p.APPROVED_AT, 9)              AS APPROVED_AT,
+    TO_TIMESTAMP_NTZ(p.LAST_BDC_AT, 9)              AS LAST_BDC_AT,
     p.DO_NUMBER,
-    p.DO_UPLOADED_AT,
-    p.LAST_DO_AT,
+    TO_TIMESTAMP_NTZ(p.DO_UPLOADED_AT, 9)           AS DO_UPLOADED_AT,
+    TO_TIMESTAMP_NTZ(p.LAST_DO_AT, 9)               AS LAST_DO_AT,
     p.IS_CLOSED,
     p.REMARKS,
     p.PEND_QTY,
@@ -239,7 +232,7 @@ SELECT
 FROM V2RETAIL.ARS_BRONZE.ARS_PEND_ALC p;
 
 -- ---------------------------------------------------------------------------
--- V_SILVER_DC_STOCK: msa_var_art aggregated to (RDC, gen_art)
+-- V_SILVER_DC_STOCK
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW V_SILVER_DC_STOCK AS
 SELECT
