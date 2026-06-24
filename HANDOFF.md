@@ -10,7 +10,7 @@
 | Table | Rows | Note |
 |---|---|---|
 | ARS_LISTING_SESSIONS | 62 | full |
-| ARS_LISTING_HISTORY | 15.3M | full |
+| ARS_LISTING_HISTORY | 24.8M | full |
 | ARS_ALLOC_HISTORY | ~11.6M | full |
 | ARS_ALLOC_MAJCAT_QUEUE | 4,189 | full |
 | ARS_PEND_ALC | ~1.1M | full |
@@ -28,23 +28,23 @@
 | MASTER_PRODUCT | 3.58M | full |
 | MASTER_CONT_SZ | 0 | empty stub (source 0 rows) |
 | MASTER_ALC_INPUT_ST_ART | 0 | empty stub (source 0 rows) |
-| ET_SALES_DATA | ~3.8M | partial (SSL crash mid-stream) |
+| ET_SALES_DATA | 6.4M | full (Jan 16 - Feb 16 2026 range only — source has no recent sales) |
 
 ## MART_ALERTS State
 
 | Rule | Status | Alerts | Note |
 |---|---|---|---|
-| R1 MSA_UNALLOC | ✓ | **1,235,407** | bulk dominant |
-| R2 SIZE_MIX_DRIFT | ✓ | 0 | runs clean; awaits ET_SALES_DATA full reload (current 3.8M is Jan-Feb only, no L-7d sales) |
-| R3 ATTR_MIX_DRIFT | ✓ | **8,172** | drift detector live across 8 attr dims |
-| R4 CAP_BIND | ✓ | 159 | binding grid caps detected |
-| R5 DC_OOS_GAP | ✓ | 18 | DC redistributable shortfalls |
+| R1 MSA_UNALLOC | ✓ | **4,648,745** | bulk dominant |
+| R2 SIZE_MIX_DRIFT | ✓ | 0 | code clean; ET_SALES_DATA only Jan-Feb so no L-7d sales for June sessions. Fixes when source ships current sales. |
+| R3 ATTR_MIX_DRIFT | ✓ | **6,178** | drift detector across 8 attr dims |
+| R4 CAP_BIND | ✓ | **76,734** | binding grid caps |
+| R5 DC_OOS_GAP | ✓ | **89,137** | DC redistributable shortfalls |
 | R7 HOLD_HEAVY | ✓ | 15 | |
 | R8 BDC_PIPELINE_DEAD | ✓ | 0 | (none stuck currently) |
 | R9 MAJCAT_REGRESSION | ✓ | 274 | |
-| R10 STORE_STARVATION | ✓ | 1 | |
+| R10 STORE_STARVATION | ✓ | 70 | |
 
-**Total MART_ALERTS:** ~1.24M (9/9 rules compile clean, 8/9 firing)
+**Total MART_ALERTS:** ~4.82M (9/9 rules compile clean, 7/9 firing)
 
 ## Worker endpoints (smoke-verified)
 - `GET /api/health` → 200 `{ok:true}`
@@ -66,12 +66,11 @@ First fire: T+40 min after registration.
 Log: `.secrets/replicate_inc.log`
 
 ## Known gaps
-1. **ET_SALES_DATA partial** — SSL broke at 3.8M rows (Jan-Feb data only). R2 will start firing once ET_SALES_DATA holds L-7d sales. Watermark stamped to NOW; re-run `replication/ars_replicate.py` with `--full` arg to repopulate during off-hours.
-2. **ARS_LISTING_HISTORY partial 500K** — full load was interrupted by cron overlap. Watermark stamped to NOW so cron stops re-truncating. Run a manual `--full` during off-hours OR let incremental catch up over time.
-3. **MASTER_ALC_INPUT_ST_ART empty in source** — V_SILVER_REQUIREMENT is a NULL view. Affects no rules currently.
-4. **MASTER_CONT_SZ empty in source** — R2 fallback baseline unavailable; R2 falls back to L-7d sales which need full ET_SALES_DATA.
-5. **V_SILVER_LISTING.ELIG_FLAG always 0** — inferred from MJ_REQ+STK_TTL+LISTING in silver; current data never hits inferred true. R4/R5 had ELIG_FLAG=1 filter removed to compensate.
-6. **Replicate code patched** — `get_target_max` salvages partial loads on next cron (no more truncate cascade). Commit pending.
+1. **ET_SALES_DATA Jan-Feb only** — full 6.4M loaded but source `dbo.ET_SALES_DATA` itself caps at 2026-02-16. R2 needs L-7d sales (current week) — will fire when source publishes current sales.
+2. **MASTER_ALC_INPUT_ST_ART empty in source** — V_SILVER_REQUIREMENT is a NULL view. Affects no rules currently.
+3. **MASTER_CONT_SZ empty in source** — R2 baseline fallback unavailable.
+4. **V_SILVER_LISTING.ELIG_FLAG always 0** — inferred from MJ_REQ+STK_TTL>0 hits only 14K rows of 3M. R4/R5 had ELIG_FLAG=1 filter removed to compensate.
+5. **Replicate self-heal patched** — `get_target_max` salvages partial loads on next cron (no more truncate cascade).
 
 ## Resume from blank machine
 ```bash
