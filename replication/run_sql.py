@@ -100,7 +100,8 @@ def main():
                 except Exception as e:
                     print(f"  [{idx:>3}/{len(stmts)}] FAIL :: {preview}", flush=True)
                     print(f"        err: {e}", flush=True)
-                    raise
+                    if not os.environ.get("RUN_SQL_CONTINUE_ON_ERROR"):
+                        raise
     finally:
         cur.close()
         conn.close()

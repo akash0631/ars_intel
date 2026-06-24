@@ -25,9 +25,9 @@ scoped AS (
 enriched AS (
     SELECT
         s.*,
-        spm.STORE_NAME,
-        spm.RDC                          AS STORE_RDC,
-        spm.RANK                         AS STORE_RANK,
+        spm.ST_NM                        AS STORE_NAME,
+        spm.ZONE                         AS STORE_ZONE,
+        spm.STATE                        AS STORE_STATE,
         mp.GEN_ART_DESC,
         mp.MAJ_CAT                       AS PROD_MAJ_CAT,
         mp.MRP                           AS PROD_MRP,
@@ -35,7 +35,7 @@ enriched AS (
         DATEDIFF(day, s.RUN_DATE, CURRENT_DATE()) AS DAYS_SINCE
     FROM scoped s
     LEFT JOIN V2RETAIL.ARS_BRONZE.STORE_PLANT_MASTER spm
-        ON spm.PLANT_CODE = s.STORE
+        ON spm.ST_CD = s.STORE
     LEFT JOIN V2RETAIL.ARS_BRONZE.MASTER_PRODUCT mp
         ON mp.GEN_ART_NUMBER = s.GEN_ART_NUMBER
 )

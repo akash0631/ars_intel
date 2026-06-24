@@ -118,9 +118,9 @@ joined AS (
 )
 SELECT
     j.*,
-    spm.STORE_NAME,
-    spm.RDC          AS STORE_RDC,
-    spm.RANK         AS STORE_RANK,
+    spm.ST_NM        AS STORE_NAME,
+    spm.ZONE         AS STORE_ZONE,
+    spm.STATE        AS STORE_STATE,
     -- store x majcat rollup aggregates (window over the drill grain)
     SUM(j.alert_count)    OVER (PARTITION BY j.SESSION_ID, j.STORE, j.MAJ_CAT) AS smc_alert_count,
     SUM(j.total_severity) OVER (PARTITION BY j.SESSION_ID, j.STORE, j.MAJ_CAT) AS smc_total_severity,
@@ -131,5 +131,5 @@ SELECT
     SUM(j.total_lost_qty) OVER (PARTITION BY j.SESSION_ID) AS sess_total_lost_qty
 FROM joined j
 LEFT JOIN V2RETAIL.ARS_BRONZE.STORE_PLANT_MASTER spm
-    ON spm.PLANT_CODE = j.STORE
+    ON spm.ST_CD = j.STORE
 ORDER BY j.SESSION_ID, j.STORE, j.MAJ_CAT, j.total_severity DESC;

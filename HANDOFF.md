@@ -1,99 +1,111 @@
-# ars_intel — Handoff State (2026-06-23)
+# ars_intel — LIVE State (2026-06-24)
 
-## Status
-- **Scaffold + 9 rules + scorer + frontend + worker** — complete
-- **AUDIT.md blockers (11)** — fixed
-- **Local git commit** — `a612430` on `main`
-- **Push to GitHub** — **PENDING** (gh CLI keyring token expired; needs interactive auth)
-- **Snowflake DDL execution** — pending (needs `SNOWFLAKE_PASSWORD`)
-- **Initial replication** — pending
-- **CF deploy** — pending
+## URLs
+- **Dashboard:** https://ars-intel.pages.dev (CF Pages)
+- **API:** https://ars-intel-api.akash-bab.workers.dev (CF Worker, Snowflake REST proxy via KEYPAIR_JWT)
+- **Repo:** https://github.com/akash0631/ars_intel
 
-## Resume in 4 steps (~30 min)
+## Snowflake State (V2RETAIL.ARS_BRONZE + ARS_GOLD)
 
-### 1. Push to GitHub
-```bash
-gh auth login -h github.com -p https
-cd C:/Users/akash.agarwal/projects/ars_intel
-gh repo create akash0631/ars_intel --public --source=. --push
-```
-
-### 2. Snowflake bootstrap
-```bash
-# Inject password
-export SNOWFLAKE_PASSWORD='<your-password>'
-export SQL_PASSWORD='Vrl@12345'
-
-# Run DDL via SnowSQL or Snowsight Web UI in order:
-#   sql/ddl/01_schemas.sql
-#   sql/ddl/02_bronze_tables.sql
-#   sql/ddl/03_silver_views.sql
-#   sql/ddl/04_mart_alerts.sql
-```
-
-### 3. First replication (full load, ~30 min for 22M+11M rows)
-```bash
-cd replication
-pip install -r requirements.txt
-python ars_replicate.py --full
-```
-
-### 4. Rules + Marts + CF deploy
-```bash
-# Rules (idempotent)
-for f in sql/rules/R*.sql; do snowsql -f $f; done
-
-# Marts
-for f in sql/marts/*.sql; do snowsql -f $f; done
-
-# Worker (after generating RSA keypair + ALTER USER ... SET RSA_PUBLIC_KEY)
-cd worker
-npm install
-wrangler secret put SNOWFLAKE_PRIVATE_KEY  # paste PEM
-wrangler deploy
-
-# Frontend
-cd ../web
-npm install
-npm run build
-wrangler pages deploy out/ --project-name=ars-intel
-```
-
-### 5. Cron incremental on V2DC-ADDVERB (.36)
-See `replication/cron.md` — Task Scheduler every 30 min.
-
-## What got fixed post-scaffold audit
-
-| File | Issue | Fix |
+| Table | Rows | Note |
 |---|---|---|
-| sql/ddl/03_silver_views.sql | Missing per-attr `*_REQ`/`*_CONT` cols on V_SILVER_LISTING | Added all 8 attr rollups |
-| sql/ddl/03_silver_views.sql | No V_SILVER_SESSION_MAJCAT for R9 | Added view joining ARS_ALLOC_MAJCAT_QUEUE on time window |
-| sql/ddl/03_silver_views.sql | No V_SILVER_PEND_ALC for R8 | Added raw passthrough view |
-| sql/ddl/03_silver_views.sql | V_SILVER_ALLOC missing RUN_DATE | Joined ARS_LISTING_SESSIONS |
-| sql/ddl/03_silver_views.sql | V_SILVER_SESSIONS missing FINISHED_AT (worker expects) | Added NULL placeholder column |
-| sql/rules/R3_ATTR_MIX_DRIFT.sql | `V2RETAIL.ARS_GOLD.MASTER_PRODUCT` (wrong schema) | → `V2RETAIL.ARS_BRONZE.MASTER_PRODUCT` (2 places) |
-| sql/rules/R8_BDC_PIPELINE_DEAD.sql | Read `V_SILVER_REQUIREMENT` cols that don't exist | → `V_SILVER_PEND_ALC` |
-| sql/rules/R9_MAJCAT_REGRESSION.sql | Read MAJCAT cols from `V_SILVER_SESSIONS` | → `V_SILVER_SESSION_MAJCAT` |
-| sql/marts/MART_ALERTS_TOP.sql | `s.WERKS` join (col is `STORE` in MART_ALERTS) | → `s.STORE` |
-| sql/marts/MART_DAILY_ROLLUP.sql | Pivot on `RULE_CODE` enum `ZERO_ALLOC/...` (dead) | → Pivot on `RULE_ID` = R1..R10 |
-| sql/marts/MART_DRILL_SESSION.sql | `WERKS`/`RULE_CODE` references | → `STORE`/`RULE_ID` (listing_ctx aliases WERKS→STORE) |
-| worker/src/index.ts | ORDER BY `ALERT_SCORE` (no such col) | → `SEVERITY` |
+| ARS_LISTING_SESSIONS | 62 | full |
+| ARS_LISTING_HISTORY | 15.3M | full |
+| ARS_ALLOC_HISTORY | ~11.6M | full |
+| ARS_ALLOC_MAJCAT_QUEUE | 4,189 | full |
+| ARS_PEND_ALC | ~1.1M | full |
+| ARS_PEND_ALC_OPERATIONS | ~30 | full |
+| ARS_MSA_VAR_ART | 199,736 | full |
+| MASTER_CONT_RNG_SEG | 1.03M | full |
+| MASTER_CONT_FAB | 1,620 | full |
+| MASTER_CONT_CLR | 5,522 | full |
+| MASTER_CONT_FIT | 195,850 | full |
+| MASTER_CONT_M_VND_CD | 2,758 | full |
+| MASTER_CONT_M_YARN_02 | 1.05M | full |
+| MASTER_CONT_WEAVE_2 | 819,401 | full |
+| MASTER_CONT_MERGE_RNG_SEG | 515,088 | full |
+| STORE_PLANT_MASTER | 491 | full |
+| MASTER_PRODUCT | 3.58M | full |
+| MASTER_CONT_SZ | 0 | empty stub (source 0 rows) |
+| MASTER_ALC_INPUT_ST_ART | 0 | empty stub (source 0 rows) |
+| ET_SALES_DATA | ~3.8M | partial (SSL crash mid-stream) |
 
-## Known deferred items
-- R2 LOW: redundant MAJ_CAT join in MASTER_PRODUCT — cosmetic
-- replication LOW: watermark advance before stream completes — benign at 100k chunks
-- R6 SCORE_LOSS not built — needs ARS code patch to populate SCORE in ALLOC_HISTORY
+## MART_ALERTS State
 
-## Files
-- 9 rule SQLs in `sql/rules/`
-- 4 DDL SQLs in `sql/ddl/`
-- 3 mart SQLs in `sql/marts/`
-- 1 Python replication script in `replication/`
-- 1 CF Worker (Hono + Snowflake REST) in `worker/`
-- 1 Next.js dashboard (3 pages + 3 components) in `web/`
+| Rule | Status | Alerts | Note |
+|---|---|---|---|
+| R1 MSA_UNALLOC | ✓ | **1,235,407** | bulk dominant |
+| R2 SIZE_MIX_DRIFT | ✗ | 0 | TRY_CAST NUMBER↔VARCHAR error — fix needed |
+| R3 ATTR_MIX_DRIFT | ✗ | 0 | col error line 45 — fix needed |
+| R4 CAP_BIND | ✗ | 0 | syntax error — fix needed |
+| R5 DC_OOS_GAP | ✗ | 0 | col error line 37 — fix needed |
+| R7 HOLD_HEAVY | ✓ | 15 | |
+| R8 BDC_PIPELINE_DEAD | ✓ | 0 | (none stuck currently) |
+| R9 MAJCAT_REGRESSION | ✓ | 274 | |
+| R10 STORE_STARVATION | ✓ | 1 | |
 
-## See also
-- `AUDIT.md` — full audit findings (pre-fix snapshot)
-- `DEPLOY.md` — step-by-step runbook
-- `SQL_RUN_ORDER.md` — exact SQL execution order
-- `Makefile` — `make all` automation
+**Total MART_ALERTS:** ~1.24M
+
+## Worker endpoints (smoke-verified)
+- `GET /api/health` → 200 `{ok:true}`
+- `GET /api/alerts/top?limit=N` → 200 JSON rows
+- `GET /api/alerts/trends?days=30` → 200
+- `GET /api/drill/sessions?run_date=YYYY-MM-DD` → 200
+- `GET /api/drill/store-majcat?session_id=&maj_cat=&store=` → 200
+
+## Auth chain
+- **Snowflake user:** akashv2kart
+- **Auth:** KEYPAIR_JWT
+- **Private key:** `~/.snowflake/akashv2kart_rsa.p8` (PKCS#8, registered Apr 18 2026)
+- **Public key fingerprint:** `SHA256:bAMWF54WXvnvwYbjUZzPmwckrQqtKSzWG4WkFk6PDeQ=`
+- **Worker secrets:** `SNOWFLAKE_PRIVATE_KEY`, `SNOWFLAKE_PRIVATE_KEY_FP`
+
+## Cron
+Task Scheduler `ars_intel_replicate_inc` — every 30 min, runs `replication/run_incremental.bat`.
+First fire: T+40 min after registration.
+Log: `.secrets/replicate_inc.log`
+
+## Known gaps
+1. **4 rules failing** (R2/R3/R4/R5) — rule SQL was written against assumed schema; bronze schema differs. Each rule needs col-mapping fix (~1h each).
+2. **ET_SALES_DATA partial** — SSL connection broke at 3.8M rows. R2 needs full sale data. Re-run `python replication/ars_replicate.py --incremental` will catch up.
+3. **MASTER_ALC_INPUT_ST_ART empty in source** — V_SILVER_REQUIREMENT is a NULL view. Affects no rules currently.
+4. **MASTER_CONT_SZ empty in source** — R2 needs CONT_SZ baseline.
+
+## Resume from blank machine
+```bash
+# 1. Clone
+gh repo clone akash0631/ars_intel && cd ars_intel
+
+# 2. Snowflake bootstrap (DDL idempotent, safe to re-run)
+export SNOWFLAKE_PASSWORD='<rotate-or-use-keypair>'
+python replication/run_sql.py sql/ddl/01_schemas.sql sql/ddl/02_bronze_tables.sql sql/ddl/03_silver_views.sql sql/ddl/04_mart_alerts.sql
+
+# 3. Incremental replication (catches deltas only)
+export SQL_PASSWORD='Vrl@12345'
+python replication/ars_replicate.py --incremental
+
+# 4. Re-run rules + marts (idempotent — each rule DELETEs+INSERTs its scope)
+python replication/run_sql.py sql/marts/MART_ALERTS_TOP.sql sql/marts/MART_DAILY_ROLLUP.sql sql/marts/MART_DRILL_SESSION.sql
+RUN_SQL_CONTINUE_ON_ERROR=1 python replication/run_sql.py sql/rules/R*.sql
+
+# 5. CF deploy refresh
+cd worker && wrangler deploy
+cd ../web && npx next build && wrangler pages deploy out --project-name ars-intel
+```
+
+## Architecture
+```
+arsdbpro/Rep_Data (SQL Server) 
+   ↓  pymssql (every 30min Task Scheduler)
+V2RETAIL.ARS_BRONZE (Snowflake, 19 tables auto-created via write_pandas)
+   ↓  silver views (V_SILVER_SESSIONS, V_SILVER_LISTING, V_SILVER_ALLOC, V_SILVER_PEND_ALC, V_SILVER_DC_STOCK, V_SILVER_SESSION_MAJCAT)
+ARS_GOLD silver layer
+   ↓  9 rule detector SQLs (R1-R10 minus R6)
+ARS_GOLD.MART_ALERTS (severity-ranked)
+   ↓  3 mart views (MART_ALERTS_TOP / MART_DAILY_ROLLUP / MART_DRILL_SESSION)
+ARS_GOLD mart layer
+   ↓  CF Worker proxies Snowflake REST API (KEYPAIR_JWT auth)
+https://ars-intel-api.akash-bab.workers.dev
+   ↓  Next.js 14 static export on CF Pages
+https://ars-intel.pages.dev (Today / Trends / Drill tabs)
+```
