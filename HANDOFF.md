@@ -35,16 +35,16 @@
 | Rule | Status | Alerts | Note |
 |---|---|---|---|
 | R1 MSA_UNALLOC | ✓ | **1,235,407** | bulk dominant |
-| R2 SIZE_MIX_DRIFT | ✗ | 0 | TRY_CAST NUMBER↔VARCHAR error — fix needed |
-| R3 ATTR_MIX_DRIFT | ✗ | 0 | col error line 45 — fix needed |
-| R4 CAP_BIND | ✗ | 0 | syntax error — fix needed |
-| R5 DC_OOS_GAP | ✗ | 0 | col error line 37 — fix needed |
+| R2 SIZE_MIX_DRIFT | ✓ | 0 | runs clean; awaits ET_SALES_DATA full reload (current 3.8M is Jan-Feb only, no L-7d sales) |
+| R3 ATTR_MIX_DRIFT | ✓ | **8,172** | drift detector live across 8 attr dims |
+| R4 CAP_BIND | ✓ | 159 | binding grid caps detected |
+| R5 DC_OOS_GAP | ✓ | 18 | DC redistributable shortfalls |
 | R7 HOLD_HEAVY | ✓ | 15 | |
 | R8 BDC_PIPELINE_DEAD | ✓ | 0 | (none stuck currently) |
 | R9 MAJCAT_REGRESSION | ✓ | 274 | |
 | R10 STORE_STARVATION | ✓ | 1 | |
 
-**Total MART_ALERTS:** ~1.24M
+**Total MART_ALERTS:** ~1.24M (9/9 rules compile clean, 8/9 firing)
 
 ## Worker endpoints (smoke-verified)
 - `GET /api/health` → 200 `{ok:true}`
@@ -66,10 +66,12 @@ First fire: T+40 min after registration.
 Log: `.secrets/replicate_inc.log`
 
 ## Known gaps
-1. **4 rules failing** (R2/R3/R4/R5) — rule SQL was written against assumed schema; bronze schema differs. Each rule needs col-mapping fix (~1h each).
-2. **ET_SALES_DATA partial** — SSL connection broke at 3.8M rows. R2 needs full sale data. Re-run `python replication/ars_replicate.py --incremental` will catch up.
+1. **ET_SALES_DATA partial** — SSL broke at 3.8M rows (Jan-Feb data only). R2 will start firing once ET_SALES_DATA holds L-7d sales. Watermark stamped to NOW; re-run `replication/ars_replicate.py` with `--full` arg to repopulate during off-hours.
+2. **ARS_LISTING_HISTORY partial 500K** — full load was interrupted by cron overlap. Watermark stamped to NOW so cron stops re-truncating. Run a manual `--full` during off-hours OR let incremental catch up over time.
 3. **MASTER_ALC_INPUT_ST_ART empty in source** — V_SILVER_REQUIREMENT is a NULL view. Affects no rules currently.
-4. **MASTER_CONT_SZ empty in source** — R2 needs CONT_SZ baseline.
+4. **MASTER_CONT_SZ empty in source** — R2 fallback baseline unavailable; R2 falls back to L-7d sales which need full ET_SALES_DATA.
+5. **V_SILVER_LISTING.ELIG_FLAG always 0** — inferred from MJ_REQ+STK_TTL+LISTING in silver; current data never hits inferred true. R4/R5 had ELIG_FLAG=1 filter removed to compensate.
+6. **Replicate code patched** — `get_target_max` salvages partial loads on next cron (no more truncate cascade). Commit pending.
 
 ## Resume from blank machine
 ```bash

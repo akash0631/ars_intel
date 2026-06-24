@@ -59,16 +59,15 @@ WITH sessions_in_scope AS (
 -- ---- majcat ship-share priority over trailing 30d -------------------------
 majcat_ship_30d AS (
   SELECT
-    mp.MAJ_CAT,
+    a.MAJ_CAT,
     SUM(a.SHIP_QTY) AS MJ_SHIP
   FROM V2RETAIL.ARS_GOLD.V_SILVER_ALLOC a
   JOIN V2RETAIL.ARS_GOLD.V_SILVER_SESSIONS s
     ON s.SESSION_ID = a.SESSION_ID
-  JOIN V2RETAIL.ARS_BRONZE.MASTER_PRODUCT mp
-    ON mp.GEN_ART_NUMBER = a.GEN_ART_NUMBER
   WHERE s.STARTED_AT >= DATEADD('day', -30, CURRENT_DATE)
     AND a.SHIP_QTY > 0
-  GROUP BY mp.MAJ_CAT
+    AND a.MAJ_CAT IS NOT NULL
+  GROUP BY a.MAJ_CAT
 ),
 total_ship_30d AS (
   SELECT SUM(MJ_SHIP) AS TOTAL_SHIP FROM majcat_ship_30d
@@ -81,22 +80,21 @@ majcat_priority AS (
   CROSS JOIN total_ship_30d t
 ),
 -- ---- one row per (session, gen_art) carrying every attr value -------------
+-- V_SILVER_ALLOC already exposes all 8 attribute cols; no MASTER_PRODUCT join needed.
 alloc_attr AS (
   SELECT
     a.SESSION_ID,
-    mp.MAJ_CAT,
+    a.MAJ_CAT,
     a.GEN_ART_NUMBER,
-    mp.FAB,
-    mp.CLR,
-    mp.RNG_SEG,
-    mp.FIT,
-    mp.M_VND_CD,
-    mp.M_YARN_02,
-    mp.WEAVE_2,
+    a.FAB,
+    a.CLR,
+    a.RNG_SEG,
+    a.FIT,
+    a.M_VND_CD,
+    a.M_YARN_02,
+    a.WEAVE_2,
     a.SHIP_QTY
   FROM V2RETAIL.ARS_GOLD.V_SILVER_ALLOC a
-  JOIN V2RETAIL.ARS_BRONZE.MASTER_PRODUCT mp
-    ON mp.GEN_ART_NUMBER = a.GEN_ART_NUMBER
   WHERE a.SHIP_QTY > 0
     AND a.SESSION_ID IN (SELECT SESSION_ID FROM sessions_in_scope)
 ),
@@ -129,7 +127,7 @@ baseline AS (
   WHERE SESSION_ID IN (SELECT SESSION_ID FROM sessions_in_scope) AND FIT IS NOT NULL
   GROUP BY SESSION_ID, MAJ_CAT, FIT
   UNION ALL
-  SELECT SESSION_ID, MAJ_CAT, 'M_VND_CD', M_VND_CD, AVG(M_VND_CD_CONT)
+  SELECT SESSION_ID, MAJ_CAT, 'M_VND_CD', TO_VARCHAR(M_VND_CD), AVG(M_VND_CD_CONT)
   FROM V2RETAIL.ARS_GOLD.V_SILVER_LISTING
   WHERE SESSION_ID IN (SELECT SESSION_ID FROM sessions_in_scope) AND M_VND_CD IS NOT NULL
   GROUP BY SESSION_ID, MAJ_CAT, M_VND_CD
@@ -163,7 +161,7 @@ actual_long AS (
   SELECT SESSION_ID, MAJ_CAT, 'FIT', FIT, SUM(SHIP_QTY)
     FROM alloc_attr WHERE FIT IS NOT NULL GROUP BY SESSION_ID, MAJ_CAT, FIT
   UNION ALL
-  SELECT SESSION_ID, MAJ_CAT, 'M_VND_CD', M_VND_CD, SUM(SHIP_QTY)
+  SELECT SESSION_ID, MAJ_CAT, 'M_VND_CD', TO_VARCHAR(M_VND_CD), SUM(SHIP_QTY)
     FROM alloc_attr WHERE M_VND_CD IS NOT NULL GROUP BY SESSION_ID, MAJ_CAT, M_VND_CD
   UNION ALL
   SELECT SESSION_ID, MAJ_CAT, 'M_YARN_02', M_YARN_02, SUM(SHIP_QTY)
@@ -223,13 +221,13 @@ worst AS (
     r.ACTUAL_PCT,
     r.DRIFT_ABS,
     r.DRIFT_SIGNED,
-    r.MJ_TOTAL_SHIP,
+    COALESCE(r.MJ_TOTAL_SHIP, m.MJ_TOTAL_SHIP) AS MJ_TOTAL_SHIP,
     -- lost_qty = drift magnitude × total majcat ship
-    r.DRIFT_ABS * COALESCE(r.MJ_TOTAL_SHIP,
-                           (SELECT MJ_TOTAL_SHIP FROM mj_ship_session m
-                             WHERE m.SESSION_ID = r.SESSION_ID
-                               AND m.MAJ_CAT    = r.MAJ_CAT)) AS LOST_QTY
+    r.DRIFT_ABS * COALESCE(r.MJ_TOTAL_SHIP, m.MJ_TOTAL_SHIP) AS LOST_QTY
   FROM ranked r
+  LEFT JOIN mj_ship_session m
+    ON m.SESSION_ID = r.SESSION_ID
+   AND m.MAJ_CAT    = r.MAJ_CAT
   WHERE r.RN = 1
 )
 SELECT

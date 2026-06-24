@@ -67,18 +67,16 @@ sent_by_size AS (
   SELECT
     a.SESSION_ID,
     a.WERKS                       AS STORE,
-    mp.MAJ_CAT,
+    a.MAJ_CAT,
     a.GEN_ART_NUMBER,
-    mp.SZ,
+    a.SZ,
     SUM(COALESCE(a.SHIP_QTY, 0))  AS SENT_QTY
   FROM V2RETAIL.ARS_GOLD.V_SILVER_ALLOC a
   JOIN sessions_scope sc
     ON sc.SESSION_ID = a.SESSION_ID
-  JOIN V2RETAIL.ARS_BRONZE.MASTER_PRODUCT mp
-    ON TRY_CAST(mp.ARTICLE_NUMBER AS STRING) = TRY_CAST(a.VAR_ART AS STRING)
   WHERE COALESCE(a.SHIP_QTY, 0) > 0
-    AND mp.SZ IS NOT NULL
-  GROUP BY a.SESSION_ID, a.WERKS, mp.MAJ_CAT, a.GEN_ART_NUMBER, mp.SZ
+    AND a.SZ IS NOT NULL
+  GROUP BY a.SESSION_ID, a.WERKS, a.MAJ_CAT, a.GEN_ART_NUMBER, a.SZ
 ),
 
 sent_totals AS (
@@ -94,16 +92,16 @@ sent_totals AS (
 -- ---------------------------------------------------------------------------
 sales_by_size AS (
   SELECT
-    es.WERKS                     AS STORE,
+    es.STORE_CODE                AS STORE,
     mp.MAJ_CAT,
     mp.SZ,
-    SUM(COALESCE(es.QTY, 0))     AS DEMAND_QTY
+    SUM(COALESCE(es.SALE_QTY, 0)) AS DEMAND_QTY
   FROM V2RETAIL.ARS_BRONZE.ET_SALES_DATA es
   JOIN V2RETAIL.ARS_BRONZE.MASTER_PRODUCT mp
-    ON TRY_CAST(mp.ARTICLE_NUMBER AS STRING) = TRY_CAST(es.MATNR AS STRING)
-  WHERE es.DATE >= DATEADD('day', -7, CURRENT_DATE)
+    ON TO_VARCHAR(mp.ARTICLE_NUMBER) = TO_VARCHAR(es.ARTICLE_NUMBER)
+  WHERE TO_TIMESTAMP_NTZ(es.SALES_DATE, 9) >= DATEADD('day', -7, CURRENT_DATE)
     AND mp.SZ IS NOT NULL
-  GROUP BY es.WERKS, mp.MAJ_CAT, mp.SZ
+  GROUP BY es.STORE_CODE, mp.MAJ_CAT, mp.SZ
 ),
 
 sales_totals AS (
@@ -119,9 +117,10 @@ cont_sz AS (
   SELECT
     MAJ_CAT,
     SZ,
-    CONT_PCT
+    AVG(CONT) AS CONT_PCT
   FROM V2RETAIL.ARS_BRONZE.MASTER_CONT_SZ
   WHERE SZ IS NOT NULL
+  GROUP BY MAJ_CAT, SZ
 ),
 
 -- ---------------------------------------------------------------------------
@@ -212,9 +211,7 @@ drift_stats AS (
     )                                              AS CHI_SQ,
     SUM(
       CASE WHEN SENT_PCT > DEMAND_PCT
-           THEN (SENT_PCT - DEMAND_PCT) * ANY_VALUE(SENT_TOTAL) OVER (
-                  PARTITION BY SESSION_ID, STORE, MAJ_CAT, GEN_ART_NUMBER
-                )
+           THEN (SENT_PCT - DEMAND_PCT) * SENT_TOTAL
            ELSE 0
       END
     )                                              AS LOST_QTY_RAW,
@@ -245,7 +242,7 @@ drift_flagged AS (
 store_rank_raw AS (
   SELECT
     l.WERKS                AS STORE,
-    AVG(TRY_CAST(l.ST_RANK AS DOUBLE)) AS ST_RANK_AVG
+    AVG(l.ST_RANK) AS ST_RANK_AVG
   FROM V2RETAIL.ARS_GOLD.V_SILVER_LISTING l
   WHERE l.ST_RANK IS NOT NULL
   GROUP BY l.WERKS
@@ -272,15 +269,14 @@ store_priority AS (
 -- ---------------------------------------------------------------------------
 majcat_ship_30d AS (
   SELECT
-    mp.MAJ_CAT,
+    a.MAJ_CAT,
     SUM(COALESCE(a.SHIP_QTY, 0)) AS SHIP_30D
   FROM V2RETAIL.ARS_GOLD.V_SILVER_ALLOC a
   JOIN V2RETAIL.ARS_GOLD.V_SILVER_SESSIONS s
     ON s.SESSION_ID = a.SESSION_ID
-  JOIN V2RETAIL.ARS_BRONZE.MASTER_PRODUCT mp
-    ON TRY_CAST(mp.ARTICLE_NUMBER AS STRING) = TRY_CAST(a.VAR_ART AS STRING)
   WHERE s.STARTED_AT >= DATEADD('day', -30, CURRENT_DATE)
-  GROUP BY mp.MAJ_CAT
+    AND a.MAJ_CAT IS NOT NULL
+  GROUP BY a.MAJ_CAT
 ),
 
 majcat_priority AS (

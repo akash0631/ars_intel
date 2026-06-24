@@ -70,47 +70,71 @@ WITH sess AS (
     WHERE STATUS = 'SUCCESS'
       AND STARTED_AT >= DATEADD('day', -7, CURRENT_DATE)
 ),
--- Unpivot the 8 grid caps and detect per-row binding.
-binds AS (
-    SELECT
-        l.SESSION_ID,
-        l.WERKS,
-        l.MAJ_CAT,
-        l.GEN_ART_NUMBER,
-        l.ST_RANK,
-        l.MJ_MBQ,
-        l.MJ_REQ,
-        cap.ATTR_DIM,
-        cap.ATTR_VAL,
-        cap.ATTR_REQ,
-        cap.ATTR_CONT,
-        (cap.ATTR_CONT * l.MJ_MBQ)                                    AS CAP_QTY,
-        GREATEST(cap.ATTR_REQ - (cap.ATTR_CONT * l.MJ_MBQ), 0)         AS CLIPPED_QTY,
-        CASE WHEN cap.ATTR_REQ > (cap.ATTR_CONT * l.MJ_MBQ) THEN 1
-             ELSE 0 END                                                AS IS_BINDING
+-- Unpivot the 8 grid caps and detect per-row binding (UNION ALL over V_SILVER_LISTING).
+listing_scope AS (
+    SELECT l.*
     FROM V2RETAIL.ARS_GOLD.V_SILVER_LISTING l
     JOIN sess se ON se.SESSION_ID = l.SESSION_ID
-    CROSS JOIN LATERAL (
-        SELECT 'MERGE_RNG_SEG' AS ATTR_DIM, l.MERGE_RNG_SEG AS ATTR_VAL,
-               l.MERGE_RNG_SEG_REQ AS ATTR_REQ, l.MERGE_RNG_SEG_CONT AS ATTR_CONT
-        UNION ALL
-        SELECT 'RNG_SEG', l.RNG_SEG, l.RNG_SEG_REQ, l.RNG_SEG_CONT
-        UNION ALL
-        SELECT 'M_YARN_02', l.M_YARN_02, l.M_YARN_02_REQ, l.M_YARN_02_CONT
-        UNION ALL
-        SELECT 'WEAVE_2', l.WEAVE_2, l.WEAVE_2_REQ, l.WEAVE_2_CONT
-        UNION ALL
-        SELECT 'FAB', l.FAB, l.FAB_REQ, l.FAB_CONT
-        UNION ALL
-        SELECT 'CLR', l.CLR, l.CLR_REQ, l.CLR_CONT
-        UNION ALL
-        SELECT 'M_VND_CD', l.M_VND_CD, l.M_VND_CD_REQ, l.M_VND_CD_CONT
-        UNION ALL
-        SELECT 'FIT', l.FIT, l.FIT_REQ, l.FIT_CONT
-    ) cap
-    WHERE l.ELIG_FLAG = 1
-      AND l.MJ_MBQ IS NOT NULL
+    WHERE l.MJ_MBQ IS NOT NULL
       AND l.MJ_MBQ > 0
+),
+binds AS (
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'MERGE_RNG_SEG' AS ATTR_DIM, MERGE_RNG_SEG AS ATTR_VAL,
+           MERGE_RNG_SEG_REQ AS ATTR_REQ, MERGE_RNG_SEG_CONT AS ATTR_CONT,
+           (MERGE_RNG_SEG_CONT * MJ_MBQ) AS CAP_QTY,
+           GREATEST(MERGE_RNG_SEG_REQ - (MERGE_RNG_SEG_CONT * MJ_MBQ), 0) AS CLIPPED_QTY,
+           CASE WHEN MERGE_RNG_SEG_REQ > (MERGE_RNG_SEG_CONT * MJ_MBQ) THEN 1 ELSE 0 END AS IS_BINDING
+    FROM listing_scope
+    UNION ALL
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'RNG_SEG', RNG_SEG, RNG_SEG_REQ, RNG_SEG_CONT,
+           (RNG_SEG_CONT * MJ_MBQ),
+           GREATEST(RNG_SEG_REQ - (RNG_SEG_CONT * MJ_MBQ), 0),
+           CASE WHEN RNG_SEG_REQ > (RNG_SEG_CONT * MJ_MBQ) THEN 1 ELSE 0 END
+    FROM listing_scope
+    UNION ALL
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'M_YARN_02', M_YARN_02, M_YARN_02_REQ, M_YARN_02_CONT,
+           (M_YARN_02_CONT * MJ_MBQ),
+           GREATEST(M_YARN_02_REQ - (M_YARN_02_CONT * MJ_MBQ), 0),
+           CASE WHEN M_YARN_02_REQ > (M_YARN_02_CONT * MJ_MBQ) THEN 1 ELSE 0 END
+    FROM listing_scope
+    UNION ALL
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'WEAVE_2', WEAVE_2, WEAVE_2_REQ, WEAVE_2_CONT,
+           (WEAVE_2_CONT * MJ_MBQ),
+           GREATEST(WEAVE_2_REQ - (WEAVE_2_CONT * MJ_MBQ), 0),
+           CASE WHEN WEAVE_2_REQ > (WEAVE_2_CONT * MJ_MBQ) THEN 1 ELSE 0 END
+    FROM listing_scope
+    UNION ALL
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'FAB', FAB, FAB_REQ, FAB_CONT,
+           (FAB_CONT * MJ_MBQ),
+           GREATEST(FAB_REQ - (FAB_CONT * MJ_MBQ), 0),
+           CASE WHEN FAB_REQ > (FAB_CONT * MJ_MBQ) THEN 1 ELSE 0 END
+    FROM listing_scope
+    UNION ALL
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'CLR', CLR, CLR_REQ, CLR_CONT,
+           (CLR_CONT * MJ_MBQ),
+           GREATEST(CLR_REQ - (CLR_CONT * MJ_MBQ), 0),
+           CASE WHEN CLR_REQ > (CLR_CONT * MJ_MBQ) THEN 1 ELSE 0 END
+    FROM listing_scope
+    UNION ALL
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'M_VND_CD', TO_VARCHAR(M_VND_CD), M_VND_CD_REQ, M_VND_CD_CONT,
+           (M_VND_CD_CONT * MJ_MBQ),
+           GREATEST(M_VND_CD_REQ - (M_VND_CD_CONT * MJ_MBQ), 0),
+           CASE WHEN M_VND_CD_REQ > (M_VND_CD_CONT * MJ_MBQ) THEN 1 ELSE 0 END
+    FROM listing_scope
+    UNION ALL
+    SELECT SESSION_ID, WERKS, MAJ_CAT, GEN_ART_NUMBER, ST_RANK, MJ_MBQ, MJ_REQ,
+           'FIT', FIT, FIT_REQ, FIT_CONT,
+           (FIT_CONT * MJ_MBQ),
+           GREATEST(FIT_REQ - (FIT_CONT * MJ_MBQ), 0),
+           CASE WHEN FIT_REQ > (FIT_CONT * MJ_MBQ) THEN 1 ELSE 0 END
+    FROM listing_scope
 ),
 binding_only AS (
     SELECT *
@@ -197,7 +221,7 @@ store_prio AS (
         WERKS,
         COALESCE(
             1.0 - (
-                (AVG(ST_RANK) - MIN(ST_RANK) OVER (PARTITION BY SESSION_ID))
+                (ST_RANK - MIN(ST_RANK) OVER (PARTITION BY SESSION_ID))
                 / NULLIF(
                     (MAX(ST_RANK) OVER (PARTITION BY SESSION_ID)
                      - MIN(ST_RANK) OVER (PARTITION BY SESSION_ID)), 0)

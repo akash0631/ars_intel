@@ -160,6 +160,32 @@ def get_watermark(sf, table_name: str) -> Optional[datetime]:
     return row[0] if row else None
 
 
+def get_target_max(sf, target_table: str, wm_col: str) -> Optional[datetime]:
+    """Return MAX(wm_col) from target table, or None if table missing/empty.
+    Handles wm_col stored as NUMBER (epoch nanos) via TO_TIMESTAMP_NTZ wrap."""
+    cur = sf.cursor()
+    try:
+        cur.execute(
+            f"SELECT MAX(TRY_TO_TIMESTAMP_NTZ({wm_col})) "
+            f"FROM {SF_DATABASE}.{SF_SCHEMA}.{target_table}"
+        )
+        row = cur.fetchone()
+        val = row[0] if row else None
+        # If TRY_TO_TIMESTAMP_NTZ fails (NUMBER nanos), try epoch conversion
+        if val is None:
+            cur.execute(
+                f"SELECT MAX(TO_TIMESTAMP_NTZ({wm_col}, 9)) "
+                f"FROM {SF_DATABASE}.{SF_SCHEMA}.{target_table}"
+            )
+            row = cur.fetchone()
+            val = row[0] if row else None
+        return val
+    except Exception:
+        return None
+    finally:
+        cur.close()
+
+
 def set_watermark(sf, table_name: str, last_loaded_at: datetime, rows_loaded: int) -> None:
     cur = sf.cursor()
     cur.execute(
@@ -228,9 +254,21 @@ def replicate_table(sql, sf, source: str, target: str, wm_col: Optional[str], mo
     else:
         last = get_watermark(sf, target)
         if last is None:
-            log.info(f"  no watermark -> full load")
-            truncate_target(sf, target)
-            query = f"SELECT * FROM dbo.{source}"
+            # No watermark. Check if target already has rows from a prior
+            # partial / interrupted load. If yes, salvage by using MAX(wm_col)
+            # in target as the effective watermark instead of truncating.
+            target_max = get_target_max(sf, target, wm_col)
+            if target_max is not None:
+                last = target_max
+                log.info(f"  no watermark but target has data -> salvage from MAX({wm_col})={last.isoformat()}")
+                query = (
+                    f"SELECT * FROM dbo.{source} "
+                    f"WHERE [{wm_col}] > '{last.strftime('%Y-%m-%d %H:%M:%S')}'"
+                )
+            else:
+                log.info(f"  no watermark + empty target -> full load")
+                truncate_target(sf, target)
+                query = f"SELECT * FROM dbo.{source}"
         else:
             log.info(f"  incremental from {last.isoformat()}")
             query = (
